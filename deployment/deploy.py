@@ -102,7 +102,24 @@ def _build_app():
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.agent import root_agent  # noqa: PLC0415
 
-    return AdkApp(agent=root_agent)
+    return AdkApp(
+        agent=root_agent,
+        env_vars={
+            "GCP_PROJECT_ID": PROJECT_ID,
+            "GCP_LOCATION": LOCATION,
+            "LOG_BUCKET": os.environ.get("LOG_BUCKET", "_Default"),
+            "LOG_VIEW": os.environ.get("LOG_VIEW", "_AllLogs"),
+            "INACTIVITY_THRESHOLD_DAYS": os.environ.get("INACTIVITY_THRESHOLD_DAYS", "45"),
+            "WORKSPACE_DOMAIN": os.environ.get("WORKSPACE_DOMAIN", ""),
+            "WORKSPACE_ADMIN_EMAIL": os.environ.get("WORKSPACE_ADMIN_EMAIL", ""),
+            "GEMINI_ENTERPRISE_PRODUCT_ID": os.environ.get(
+                "GEMINI_ENTERPRISE_PRODUCT_ID", "Google-Gemini-Enterprise"
+            ),
+            "GEMINI_ENTERPRISE_SKU_ID": os.environ.get("GEMINI_ENTERPRISE_SKU_ID", "1010310006"),
+            "NOTIFICATION_SENDER_EMAIL": os.environ.get("NOTIFICATION_SENDER_EMAIL", ""),
+            "ORG_ADMIN_EMAILS": os.environ.get("ORG_ADMIN_EMAILS", ""),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -142,21 +159,6 @@ def deploy(args: argparse.Namespace) -> None:
             "revokes their licences, and notifies users and org administrators."
         ),
         extra_packages=["./agent"],
-        env_vars={
-            "GCP_PROJECT_ID": PROJECT_ID,
-            "GCP_LOCATION": LOCATION,
-            "LOG_BUCKET": os.environ.get("LOG_BUCKET", "_Default"),
-            "LOG_VIEW": os.environ.get("LOG_VIEW", "_AllLogs"),
-            "INACTIVITY_THRESHOLD_DAYS": os.environ.get("INACTIVITY_THRESHOLD_DAYS", "45"),
-            "WORKSPACE_DOMAIN": os.environ.get("WORKSPACE_DOMAIN", ""),
-            "WORKSPACE_ADMIN_EMAIL": os.environ.get("WORKSPACE_ADMIN_EMAIL", ""),
-            "GEMINI_ENTERPRISE_PRODUCT_ID": os.environ.get(
-                "GEMINI_ENTERPRISE_PRODUCT_ID", "Google-Gemini-Enterprise"
-            ),
-            "GEMINI_ENTERPRISE_SKU_ID": os.environ.get("GEMINI_ENTERPRISE_SKU_ID", "1010310006"),
-            "NOTIFICATION_SENDER_EMAIL": os.environ.get("NOTIFICATION_SENDER_EMAIL", ""),
-            "ORG_ADMIN_EMAILS": os.environ.get("ORG_ADMIN_EMAILS", ""),
-        },
     )
 
     print("\nDeployment successful!")
@@ -221,9 +223,28 @@ def test_agent(args: argparse.Namespace) -> None:
 
     remote_app = reasoning_engines.ReasoningEngine(resource_name)
 
+    # Manually register stream-mode methods (the SDK raises on 'async' modes
+    # before it can register 'stream' modes, so we do it selectively here).
+    if not hasattr(remote_app, "stream_query"):
+        import types  # noqa: PLC0415
+        from vertexai.reasoning_engines._reasoning_engines import (  # noqa: PLC0415
+            _wrap_stream_query_operation,
+        )
+        for schema in remote_app.operation_schemas():
+            if schema.get("api_mode") == "stream":
+                method = _wrap_stream_query_operation(
+                    method_name=schema["name"],
+                    doc=schema.get("description", ""),
+                )
+                setattr(remote_app, schema["name"], types.MethodType(method, remote_app))
+
     # Create a session
     session = remote_app.create_session(user_id="test-user")
-    session_id = session.get("id") or session.get("session_id") or session.get("name", "")
+    session_id = (
+        session.get("id")
+        or session.get("session_id")
+        or session.get("name", "")
+    )
 
     # Stream the response
     for chunk in remote_app.stream_query(

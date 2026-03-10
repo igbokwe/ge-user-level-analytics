@@ -183,40 +183,46 @@ def query_user_last_activity(user_email: str) -> dict[str, Any]:
 
 def query_daily_usage(days_back: int = 30) -> dict[str, Any]:
     """
-    Return a daily usage breakdown per user and API method for reporting.
+    Return a daily usage breakdown from the Discovery Engine / Gemini Enterprise
+    analytics export in BigQuery (igbokwe.geminienterprise.analytics).
 
     Args:
         days_back: Number of past days to include in the report. Default 30.
 
     Returns:
         A dict with key "usage_records": list of
-          {"date": str, "user": str, "method": str, "activity_count": int}
+          {"date": str, "engine_id": str, "data_source": str,
+           "daily_active_users": float|None, "search_count": float|None,
+           "answer_count": float|None, "seats_purchased": float|None,
+           "seats_claimed": float|None}
     """
     project_id = os.environ["GCP_PROJECT_ID"]
-    table = _log_table(project_id)
     since = date.today() - timedelta(days=days_back)
 
     sql = f"""
         SELECT
-            DATE(timestamp)                                                AS activity_date,
-            proto_payload.audit_log.authentication_info.principal_email   AS user,
-            proto_payload.audit_log.method_name                           AS method,
-            COUNT(1)                                                       AS activity_count
+            date,
+            engine_id,
+            data_source,
+            SUM(daily_active_user_count)  AS daily_active_users,
+            SUM(search_count)             AS search_count,
+            SUM(answer_count)             AS answer_count,
+            MAX(seats_purchased)          AS seats_purchased,
+            MAX(seats_claimed)            AS seats_claimed
         FROM
-            {table}
+            `{project_id}.geminienterprise.analytics`
         WHERE
-            proto_payload.audit_log.service_name = @service_name
-            AND DATE(timestamp) >= @since
+            date >= @since
+            AND date IS NOT NULL
         GROUP BY
             1, 2, 3
         ORDER BY
-            1 DESC, 4 DESC
+            1 DESC, 2, 3
     """
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter("service_name", "STRING", _DISCOVERY_ENGINE_SERVICE),
-            bigquery.ScalarQueryParameter("since", "DATE", since.isoformat()),
+            bigquery.ScalarQueryParameter("since", "STRING", since.isoformat()),
         ]
     )
 
@@ -225,13 +231,16 @@ def query_daily_usage(days_back: int = 30) -> dict[str, Any]:
 
     records = [
         {
-            "date": row["activity_date"].isoformat(),
-            "user": row["user"],
-            "method": row["method"],
-            "activity_count": row["activity_count"],
+            "date": row["date"],
+            "engine_id": row["engine_id"],
+            "data_source": row["data_source"],
+            "daily_active_users": row["daily_active_users"],
+            "search_count": row["search_count"],
+            "answer_count": row["answer_count"],
+            "seats_purchased": row["seats_purchased"],
+            "seats_claimed": row["seats_claimed"],
         }
         for row in rows
-        if row["user"] and not row["user"].endswith(".gserviceaccount.com")
     ]
 
     return {"usage_records": records}
