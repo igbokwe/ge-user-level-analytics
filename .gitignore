@@ -7,6 +7,10 @@
 .last_resource_name
 *.tar.gz
 
+# gcloud SDK (downloaded at runtime, not checked in)
+google-cloud-sdk/
+google-cloud-cli-*.tar.gz
+
 # Python
 __pycache__/
 *.pyc
