@@ -15,10 +15,9 @@ Deployment target: Vertex AI Agent Engine
 from __future__ import annotations
 
 import os
-import uuid
 
 from dotenv import load_dotenv
-from google.adk.agents import Agent
+from google.adk.agents import LlmAgent as Agent
 
 from agent.tools import (
     get_user_license_status,

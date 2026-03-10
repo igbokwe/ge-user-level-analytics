@@ -1,0 +1,17 @@
+# Credentials — never commit
+.env
+*.json
+!.env.example
+
+# Agent Engine artefacts
+.last_resource_name
+*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+dist/
+*.egg-info/
+.eggs/
