@@ -91,6 +91,22 @@ def _ensure_staging_bucket() -> None:
 
 def _init_vertexai() -> None:
     import vertexai  # noqa: PLC0415
+    from google.cloud.aiplatform_v1beta1.services.reasoning_engine_service import (  # noqa: PLC0415
+        ReasoningEngineServiceClient,
+    )
+    from google.cloud.aiplatform_v1beta1.services.reasoning_engine_service.transports import (  # noqa: PLC0415
+        rest as rest_transport,
+    )
+
+    # Force REST transport on the Reasoning Engine client so that this script
+    # works in environments where gRPC is blocked by a TLS-intercepting proxy.
+    _original_init = ReasoningEngineServiceClient.__init__
+
+    def _rest_init(self, *args, **kwargs):
+        kwargs.setdefault("transport", "rest")
+        _original_init(self, *args, **kwargs)
+
+    ReasoningEngineServiceClient.__init__ = _rest_init
 
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=STAGING_BUCKET)
 
