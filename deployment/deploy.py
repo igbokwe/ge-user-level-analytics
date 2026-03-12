@@ -228,10 +228,35 @@ def delete(args: argparse.Namespace) -> None:
     print("Deleted.")
 
 
+def _get_access_token() -> str:
+    """Obtain a GCP access token via application default credentials."""
+    import json  # noqa: PLC0415
+    import urllib.parse  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    adc_path = os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
+    if not os.path.exists(adc_path):
+        print("ERROR: No application default credentials found. Run: gcloud auth application-default login")
+        sys.exit(1)
+    with open(adc_path) as f:
+        creds = json.load(f)
+    body = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "client_id": creds["client_id"],
+        "client_secret": creds["client_secret"],
+        "refresh_token": creds["refresh_token"],
+    }).encode()
+    req = urllib.request.Request("https://oauth2.googleapis.com/token", data=body, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    resp = urllib.request.urlopen(req, timeout=15)
+    return json.loads(resp.read())["access_token"]
+
+
 def test_agent(args: argparse.Namespace) -> None:
     """Send a test prompt to a deployed agent and stream the response."""
-    _init_vertexai()
-    from vertexai.preview import reasoning_engines  # noqa: PLC0415
+    import json  # noqa: PLC0415
+    import time  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
 
     # Resolve resource name from arg or saved file
     resource_name: str = args.resource_name
@@ -244,51 +269,115 @@ def test_agent(args: argparse.Namespace) -> None:
         print("ERROR: --resource-name is required (or deploy first to save it automatically).")
         sys.exit(1)
 
+    # Convert short ID to full resource name
+    if not resource_name.startswith("projects/"):
+        resource_name = (
+            f"projects/{PROJECT_ID}/locations/{LOCATION}/reasoningEngines/{resource_name}"
+        )
+
     prompt: str = args.prompt
     print(f"Sending prompt to {resource_name} …")
     print(f"Prompt: {prompt}\n")
     print("=" * 60)
 
-    remote_app = reasoning_engines.ReasoningEngine(resource_name)
+    token = _get_access_token()
+    base_url = f"https://{LOCATION}-aiplatform.googleapis.com/v1beta1/{resource_name}"
 
-    # Manually register stream-mode methods (the SDK raises on 'async' modes
-    # before it can register 'stream' modes, so we do it selectively here).
-    if not hasattr(remote_app, "stream_query"):
-        import types  # noqa: PLC0415
-        from vertexai.reasoning_engines._reasoning_engines import (  # noqa: PLC0415
-            _wrap_stream_query_operation,
-        )
-        for schema in remote_app.operation_schemas():
-            if schema.get("api_mode") == "stream":
-                method = _wrap_stream_query_operation(
-                    method_name=schema["name"],
-                    doc=schema.get("description", ""),
-                )
-                setattr(remote_app, schema["name"], types.MethodType(method, remote_app))
+    def _api(path: str, body: dict | None = None, method: str = "POST") -> dict:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{base_url}{path}", data=data, method=method)
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            resp = urllib.request.urlopen(req, timeout=60)
+            return json.loads(resp.read())
+        except urllib.error.HTTPError as exc:  # noqa: BLE001
+            body_text = exc.read().decode()
+            print(f"API error {exc.code}: {body_text[:500]}")
+            sys.exit(1)
 
-    # Create a session
-    session = remote_app.create_session(user_id="test-user")
-    session_id = (
-        session.get("id")
-        or session.get("session_id")
-        or session.get("name", "")
+    # Create session and wait for the LRO to complete
+    lro = _api("/sessions", {"userId": "test-user"})
+    lro_name = lro.get("name", "")
+    for _ in range(20):
+        time.sleep(2)
+        lro_check_url = f"https://{LOCATION}-aiplatform.googleapis.com/v1/{lro_name}"
+        req = urllib.request.Request(lro_check_url, method="GET")
+        req.add_header("Authorization", f"Bearer {token}")
+        resp = urllib.request.urlopen(req, timeout=15)
+        result = json.loads(resp.read())
+        if result.get("done"):
+            break
+    session_id = lro_name.split("/sessions/")[1].split("/")[0]
+    print(f"Session: {session_id}\n")
+
+    # Stream the response using raw REST (avoids gRPC TLS issues)
+    stream_req = urllib.request.Request(
+        f"{base_url}:streamQuery",
+        data=json.dumps({
+            "input": {
+                "user_id": "test-user",
+                "session_id": session_id,
+                "message": prompt,
+            }
+        }).encode(),
+        method="POST",
     )
+    stream_req.add_header("Authorization", f"Bearer {token}")
+    stream_req.add_header("Content-Type", "application/json")
 
-    # Stream the response
-    for chunk in remote_app.stream_query(
-        user_id="test-user",
-        session_id=session_id,
-        message=prompt,
-    ):
-        chunk_type = chunk.get("type", "")
-        if chunk_type == "text":
-            print(chunk["text"], end="", flush=True)
-        elif chunk_type == "tool_call":
-            tool = chunk.get("name", "unknown")
-            print(f"\n[tool call: {tool}]", flush=True)
-        elif chunk_type == "tool_result":
-            tool = chunk.get("name", "unknown")
-            print(f"[tool result: {tool}]", flush=True)
+    try:
+        resp = urllib.request.urlopen(stream_req, timeout=120)
+    except urllib.error.HTTPError as exc:  # noqa: BLE001
+        print(f"Stream error {exc.code}: {exc.read().decode()[:500]}")
+        sys.exit(1)
+
+    # Parse NDJSON response chunks
+    for raw_line in resp:
+        line = raw_line.decode("utf-8").strip()
+        if not line:
+            continue
+        try:
+            chunk = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        content = chunk.get("content", {})
+        role = content.get("role", "")
+        parts = content.get("parts", [])
+
+        for part in parts:
+            # Text response from the model
+            if "text" in part:
+                print(part["text"], end="", flush=True)
+
+            # Tool/function call from the model
+            elif "function_call" in part:
+                fc = part["function_call"]
+                name = fc.get("name", "unknown")
+                if name == "adk_request_credential":
+                    # Extract and display the OAuth consent URL
+                    auth_cfg = fc.get("args", {}).get("authConfig", {})
+                    auth_uri = (
+                        auth_cfg.get("exchangedAuthCredential", {})
+                        .get("oauth2", {})
+                        .get("authUri", "")
+                    )
+                    if auth_uri:
+                        print("\n" + "=" * 60)
+                        print("OAUTH CONSENT REQUIRED")
+                        print("Open this URL in a browser to authorise the agent:")
+                        print(f"\n  {auth_uri}\n")
+                        print("=" * 60)
+                else:
+                    print(f"\n[tool call: {name}]", flush=True)
+
+            # Tool result / function response
+            elif "function_response" in part:
+                fr = part["function_response"]
+                name = fr.get("name", "unknown")
+                if name != "adk_request_credential":
+                    print(f"[tool result: {name}]", flush=True)
 
     print("\n" + "=" * 60)
 
