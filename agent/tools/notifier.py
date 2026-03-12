@@ -5,7 +5,10 @@ Notifies:
   1. Inactive users whose license has been revoked.
   2. Organisation administrators with a summary report.
 
-Required service-account scopes (domain-wide delegation):
+Authentication: Google Identity for Agents (ADK ToolContext OAuth flow).
+The agent acts on behalf of the user who invokes it.
+
+Required OAuth scope (requested via _auth.py):
   - https://www.googleapis.com/auth/gmail.send
 """
 
@@ -17,13 +20,22 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
 
-from google.oauth2 import service_account
+from google.adk.tools.tool_context import ToolContext
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from agent.tools._auth import get_workspace_credentials
 from agent.tools.trace import tracer
 
-_GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+_AUTH_REQUIRED = {
+    "sent": False,
+    "message_id": None,
+    "error": "authentication_required",
+    "message": (
+        "Google Workspace access is required. "
+        "Please authorise the agent via the consent screen that has appeared."
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -31,13 +43,12 @@ _GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 # ---------------------------------------------------------------------------
 
 
-def _gmail_service(sender_email: str):
-    """Return a Gmail API service client impersonating *sender_email*."""
-    creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-    tracer.log("gmail_service", "building Gmail service", sender_email=sender_email, creds_path=creds_path)
-    creds = service_account.Credentials.from_service_account_file(
-        creds_path, scopes=_GMAIL_SCOPES
-    ).with_subject(sender_email)
+def _gmail_service(tool_context: ToolContext):
+    """Return a Gmail API service using the caller's identity."""
+    creds = get_workspace_credentials(tool_context)
+    if creds is None:
+        return None
+    tracer.log("gmail_service", "building Gmail service via caller identity")
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
@@ -59,33 +70,28 @@ def _build_message(
     return {"raw": raw}
 
 
-def _send_email(sender: str, recipient: str, subject: str, body_html: str, body_text: str) -> dict[str, Any]:
-    tracer.log(
-        "send_email",
-        "sending email via Gmail API",
-        sender=sender,
-        recipient=recipient,
-        subject=subject,
-    )
-    service = _gmail_service(sender)
+def _send_email(
+    tool_context: ToolContext,
+    sender: str,
+    recipient: str,
+    subject: str,
+    body_html: str,
+    body_text: str,
+) -> dict[str, Any]:
+    tracer.log("send_email", "sending email via Gmail API",
+               sender=sender, recipient=recipient, subject=subject)
+    service = _gmail_service(tool_context)
+    if service is None:
+        return _AUTH_REQUIRED
     message = _build_message(sender, recipient, subject, body_html, body_text)
     try:
         result = service.users().messages().send(userId="me", body=message).execute()
-        tracer.log(
-            "send_email",
-            "email sent successfully",
-            recipient=recipient,
-            message_id=result.get("id"),
-        )
+        tracer.log("send_email", "email sent successfully",
+                   recipient=recipient, message_id=result.get("id"))
         return {"sent": True, "message_id": result.get("id"), "error": None}
     except HttpError as exc:
-        tracer.log(
-            "send_email",
-            "HttpError sending email",
-            recipient=recipient,
-            http_status=exc.resp.status,
-            error=str(exc),
-        )
+        tracer.log("send_email", "HttpError sending email",
+                   recipient=recipient, http_status=exc.resp.status, error=str(exc))
         return {"sent": False, "message_id": None, "error": str(exc)}
 
 
@@ -176,6 +182,7 @@ _ADMIN_SUMMARY_TEXT = (
 def notify_inactive_user(
     user_email: str,
     last_activity: str,
+    tool_context: ToolContext,
     inactivity_days: int = 45,
     display_name: str | None = None,
 ) -> dict[str, Any]:
@@ -185,6 +192,7 @@ def notify_inactive_user(
     Args:
         user_email:       Recipient's email address.
         last_activity:    ISO date of last recorded activity (or "never").
+        tool_context:     Injected by ADK — carries the caller's identity token.
         inactivity_days:  Threshold that triggered revocation.
         display_name:     Optional friendly name; defaults to the email prefix.
 
@@ -198,12 +206,8 @@ def notify_inactive_user(
         inactivity_days=inactivity_days,
     ) as span:
         sender = os.environ.get("NOTIFICATION_SENDER_EMAIL", "")
-        tracer.log(
-            "notify_inactive_user",
-            "resolving sender",
-            sender=sender,
-            sender_configured=bool(sender),
-        )
+        tracer.log("notify_inactive_user", "resolving sender",
+                   sender=sender, sender_configured=bool(sender))
 
         if not sender:
             tracer.log("notify_inactive_user", "NOTIFICATION_SENDER_EMAIL not set — cannot send")
@@ -224,6 +228,7 @@ def notify_inactive_user(
         )
 
         result = _send_email(
+            tool_context=tool_context,
             sender=sender,
             recipient=user_email,
             subject="Action Required: Your Gemini Enterprise Licence Has Been Revoked",
@@ -236,6 +241,7 @@ def notify_inactive_user(
 
 def notify_admins(
     revocation_results: list[dict[str, Any]],
+    tool_context: ToolContext,
     inactivity_days: int = 45,
 ) -> dict[str, Any]:
     """
@@ -245,6 +251,7 @@ def notify_admins(
         revocation_results: List of per-user result dicts produced by
                             revoke_gemini_license(). Each entry must contain:
                             "user", "last_activity", "revoked", "message".
+        tool_context:       Injected by ADK — carries the caller's identity token.
         inactivity_days:    Inactivity threshold used for this run.
 
     Returns:
@@ -261,14 +268,9 @@ def notify_admins(
         admin_emails_raw = os.environ.get("ORG_ADMIN_EMAILS", "")
         admin_emails = [e.strip() for e in admin_emails_raw.split(",") if e.strip()]
 
-        tracer.log(
-            "notify_admins",
-            "resolved config",
-            sender=sender,
-            sender_configured=bool(sender),
-            admin_emails=admin_emails,
-            admin_count=len(admin_emails),
-        )
+        tracer.log("notify_admins", "resolved config", sender=sender,
+                   sender_configured=bool(sender), admin_emails=admin_emails,
+                   admin_count=len(admin_emails))
 
         if not admin_emails:
             tracer.log("notify_admins", "ORG_ADMIN_EMAILS not configured — cannot send")
@@ -279,7 +281,6 @@ def notify_admins(
         run_date = _dt.date.today().isoformat()
         total = len(revocation_results)
 
-        # Build HTML rows
         html_rows = ""
         text_rows = ""
         for r in revocation_results:
@@ -300,16 +301,12 @@ def notify_admins(
             )
 
         body_html = _ADMIN_SUMMARY_HTML.format(
-            run_date=run_date,
-            total=total,
-            inactivity_days=inactivity_days,
-            rows=html_rows,
+            run_date=run_date, total=total,
+            inactivity_days=inactivity_days, rows=html_rows,
         )
         body_text = _ADMIN_SUMMARY_TEXT.format(
-            run_date=run_date,
-            total=total,
-            inactivity_days=inactivity_days,
-            rows=text_rows,
+            run_date=run_date, total=total,
+            inactivity_days=inactivity_days, rows=text_rows,
         )
 
         sent_to: list[str] = []
@@ -318,6 +315,7 @@ def notify_admins(
         for admin_email in admin_emails:
             tracer.log("notify_admins", "sending to admin", admin_email=admin_email)
             result = _send_email(
+                tool_context=tool_context,
                 sender=sender,
                 recipient=admin_email,
                 subject=f"[Report] Gemini Enterprise Licence Revocations — {run_date}",
@@ -330,7 +328,8 @@ def notify_admins(
             else:
                 err = f"{admin_email}: {result['error']}"
                 errors.append(err)
-                tracer.log("notify_admins", "failed to notify admin", admin_email=admin_email, error=result["error"])
+                tracer.log("notify_admins", "failed to notify admin",
+                           admin_email=admin_email, error=result["error"])
 
         span.ok(sent_to=sent_to, error_count=len(errors))
         return {"sent_to": sent_to, "errors": errors}

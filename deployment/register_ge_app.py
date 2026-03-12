@@ -32,7 +32,7 @@ LOCATION = "us"
 BASE_URL = f"https://{LOCATION}-discoveryengine.googleapis.com/v1alpha"
 ASSISTANT_ID = "default_assistant"
 
-AGENT_DISPLAY_NAME = os.environ.get("AGENT_ENGINE_DISPLAY_NAME", "GE User Level Analytics")
+AGENT_DISPLAY_NAME = os.environ.get("AGENT_ENGINE_DISPLAY_NAME", "outcome")
 AGENT_DESCRIPTION = (
     "Governs Gemini Enterprise licences: identifies inactive users (>45 days), "
     "queries usage analytics, revokes licences, and notifies users and org administrators."

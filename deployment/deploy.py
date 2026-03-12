@@ -134,10 +134,11 @@ def _build_app():
         "ORG_ADMIN_EMAILS": os.environ.get("ORG_ADMIN_EMAILS", ""),
     }
 
-    # Embed OAuth user credentials when provided so the agent can call
-    # Google Workspace APIs (Licensing, Directory) at runtime without needing
-    # a separate service-account key file.
-    for oauth_var in ("OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET", "OAUTH_REFRESH_TOKEN"):
+    # Embed the OAuth client credentials so the agent can drive the Google
+    # Identity for Agents consent flow at runtime.  The actual user tokens
+    # are obtained on-demand via the ADK ToolContext OAuth flow — they are
+    # never baked into the deployment.
+    for oauth_var in ("OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET"):
         value = os.environ.get(oauth_var, "")
         if value:
             env_vars[oauth_var] = value

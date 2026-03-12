@@ -10,7 +10,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from google.cloud import bigquery
-from google.oauth2 import service_account
 
 from agent.tools.trace import tracer
 
@@ -30,14 +29,7 @@ _ACTIVE_METHODS = [
 
 def _get_bq_client() -> bigquery.Client:
     project_id = os.environ["GCP_PROJECT_ID"]
-    creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    tracer.log("bq_client", "building BigQuery client", project_id=project_id, creds_path=creds_path)
-    if creds_path:
-        credentials = service_account.Credentials.from_service_account_file(
-            creds_path,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        return bigquery.Client(project=project_id, credentials=credentials)
+    tracer.log("bq_client", "building BigQuery client (ADC)", project_id=project_id)
     return bigquery.Client(project=project_id)
 
 
