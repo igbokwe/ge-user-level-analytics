@@ -93,9 +93,15 @@ fi
 
 # ---- 5. Deploy to Agent Engine ---------------------------------------------
 echo ""
-echo "[5/5] Deploying to Vertex AI Agent Engine …"
+echo "[5/6] Deploying to Vertex AI Agent Engine …"
 cd "$(dirname "$0")"
 python3 deployment/deploy.py deploy
+
+# ---- 6. Register in Gemini Enterprise app ----------------------------------
+echo ""
+echo "[6/6] Registering agent in Gemini Enterprise app (outcome-devtest) …"
+python3 deployment/register_ge_app.py register
+echo "   Agent registered in Gemini app."
 
 echo ""
 echo "================================================================"
@@ -107,4 +113,7 @@ echo "    python3 deployment/deploy.py test"
 echo ""
 echo "  To list all deployed agents:"
 echo "    python3 deployment/deploy.py list"
+echo ""
+echo "  To list agents in the Gemini app:"
+echo "    python3 deployment/register_ge_app.py list"
 echo "================================================================"
