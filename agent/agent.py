@@ -33,7 +33,6 @@ from agent.tools import (
     query_user_last_activity,
     revoke_gemini_license,
 )
-from agent.tools._auth import request_workspace_auth
 from agent.tools.trace import tracer
 
 load_dotenv()
@@ -132,27 +131,6 @@ def _after_tool(tool, args, tool_context, tool_response) -> None:  # type: ignor
 
 
 # ---------------------------------------------------------------------------
-# Eager-auth callback — runs before the first agent turn
-# ---------------------------------------------------------------------------
-
-
-def _before_agent(callback_context) -> None:  # type: ignore[override]
-    """Request Google Workspace OAuth credentials at session start.
-
-    By calling ``request_credential()`` here (rather than waiting for the first
-    Workspace tool call) the user sees the Google sign-in consent screen as soon
-    as the agent session begins, before any tool is invoked.  Subsequent calls
-    are no-ops because ``get_auth_response`` returns the cached token.
-    """
-    already_authed = request_workspace_auth(callback_context)
-    tracer.log(
-        "before_agent",
-        "eager auth check",
-        already_authed=already_authed,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Agent definition
 # ---------------------------------------------------------------------------
 
@@ -180,7 +158,6 @@ root_agent = Agent(
         log_revocation_action,
         log_run_summary,
     ],
-    before_agent_callback=_before_agent,
     before_tool_callback=_before_tool,
     after_tool_callback=_after_tool,
 )
