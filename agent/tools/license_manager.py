@@ -2,7 +2,15 @@
 License Manager tool: uses the Google Workspace Licensing API to check and
 revoke Gemini Enterprise (SKU) licenses for individual users.
 
-Required service-account scopes (domain-wide delegation):
+Authentication (in priority order):
+  1. OAuth user credentials via env vars OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET /
+     OAUTH_REFRESH_TOKEN.  The authorised user must be a Google Workspace super-
+     admin so that the Licensing and Directory APIs can be called on behalf of the
+     whole domain.
+  2. Service account with domain-wide delegation via GOOGLE_APPLICATION_CREDENTIALS
+     (legacy / fallback).
+
+Required API scopes:
   - https://www.googleapis.com/auth/apps.licensing
   - https://www.googleapis.com/auth/admin.directory.user.readonly
 """
@@ -12,7 +20,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -39,13 +46,38 @@ _DEFAULT_SKU_ID = os.environ.get("GEMINI_ENTERPRISE_SKU_ID", "1010310006")
 # ---------------------------------------------------------------------------
 
 
-def _get_delegated_credentials(user_email: str | None = None) -> service_account.Credentials:
-    """Build credentials, optionally impersonating *user_email* (domain admin)."""
+def _get_credentials():
+    """Build credentials for Workspace API calls.
+
+    Prefers OAuth user credentials (OAUTH_REFRESH_TOKEN env var) over a
+    service-account key file (GOOGLE_APPLICATION_CREDENTIALS env var).
+    """
+    refresh_token = os.environ.get("OAUTH_REFRESH_TOKEN")
+    if refresh_token:
+        from google.oauth2.credentials import Credentials  # noqa: PLC0415
+
+        tracer.log(
+            "license_credentials",
+            "using OAuth user credentials",
+            client_id=os.environ.get("OAUTH_CLIENT_ID", "")[:20] + "…",
+        )
+        return Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            client_id=os.environ["OAUTH_CLIENT_ID"],
+            client_secret=os.environ["OAUTH_CLIENT_SECRET"],
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=_LICENSING_SCOPES,
+        )
+
+    # Fallback: service account with domain-wide delegation
+    from google.oauth2 import service_account  # noqa: PLC0415
+
     creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-    admin_email = user_email or os.environ["WORKSPACE_ADMIN_EMAIL"]
+    admin_email = os.environ["WORKSPACE_ADMIN_EMAIL"]
     tracer.log(
         "license_credentials",
-        "building delegated credentials",
+        "building delegated service-account credentials",
         creds_path=creds_path,
         impersonating=admin_email,
     )
@@ -56,13 +88,11 @@ def _get_delegated_credentials(user_email: str | None = None) -> service_account
 
 
 def _licensing_service():
-    creds = _get_delegated_credentials()
-    return build("licensing", "v1", credentials=creds, cache_discovery=False)
+    return build("licensing", "v1", credentials=_get_credentials(), cache_discovery=False)
 
 
 def _directory_service():
-    creds = _get_delegated_credentials()
-    return build("admin", "directory_v1", credentials=creds, cache_discovery=False)
+    return build("admin", "directory_v1", credentials=_get_credentials(), cache_discovery=False)
 
 
 # ---------------------------------------------------------------------------

@@ -118,24 +118,31 @@ def _build_app():
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.agent import root_agent  # noqa: PLC0415
 
-    return AdkApp(
-        agent=root_agent,
-        env_vars={
-            "GCP_PROJECT_ID": PROJECT_ID,
-            "GCP_LOCATION": LOCATION,
-            "LOG_BUCKET": os.environ.get("LOG_BUCKET", "_Default"),
-            "LOG_VIEW": os.environ.get("LOG_VIEW", "_AllLogs"),
-            "INACTIVITY_THRESHOLD_DAYS": os.environ.get("INACTIVITY_THRESHOLD_DAYS", "45"),
-            "WORKSPACE_DOMAIN": os.environ.get("WORKSPACE_DOMAIN", ""),
-            "WORKSPACE_ADMIN_EMAIL": os.environ.get("WORKSPACE_ADMIN_EMAIL", ""),
-            "GEMINI_ENTERPRISE_PRODUCT_ID": os.environ.get(
-                "GEMINI_ENTERPRISE_PRODUCT_ID", "Google-Gemini-Enterprise"
-            ),
-            "GEMINI_ENTERPRISE_SKU_ID": os.environ.get("GEMINI_ENTERPRISE_SKU_ID", "1010310006"),
-            "NOTIFICATION_SENDER_EMAIL": os.environ.get("NOTIFICATION_SENDER_EMAIL", ""),
-            "ORG_ADMIN_EMAILS": os.environ.get("ORG_ADMIN_EMAILS", ""),
-        },
-    )
+    env_vars = {
+        "GCP_PROJECT_ID": PROJECT_ID,
+        "GCP_LOCATION": LOCATION,
+        "LOG_BUCKET": os.environ.get("LOG_BUCKET", "_Default"),
+        "LOG_VIEW": os.environ.get("LOG_VIEW", "_AllLogs"),
+        "INACTIVITY_THRESHOLD_DAYS": os.environ.get("INACTIVITY_THRESHOLD_DAYS", "45"),
+        "WORKSPACE_DOMAIN": os.environ.get("WORKSPACE_DOMAIN", ""),
+        "WORKSPACE_ADMIN_EMAIL": os.environ.get("WORKSPACE_ADMIN_EMAIL", ""),
+        "GEMINI_ENTERPRISE_PRODUCT_ID": os.environ.get(
+            "GEMINI_ENTERPRISE_PRODUCT_ID", "Google-Gemini-Enterprise"
+        ),
+        "GEMINI_ENTERPRISE_SKU_ID": os.environ.get("GEMINI_ENTERPRISE_SKU_ID", "1010310006"),
+        "NOTIFICATION_SENDER_EMAIL": os.environ.get("NOTIFICATION_SENDER_EMAIL", ""),
+        "ORG_ADMIN_EMAILS": os.environ.get("ORG_ADMIN_EMAILS", ""),
+    }
+
+    # Embed OAuth user credentials when provided so the agent can call
+    # Google Workspace APIs (Licensing, Directory) at runtime without needing
+    # a separate service-account key file.
+    for oauth_var in ("OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET", "OAUTH_REFRESH_TOKEN"):
+        value = os.environ.get(oauth_var, "")
+        if value:
+            env_vars[oauth_var] = value
+
+    return AdkApp(agent=root_agent, env_vars=env_vars)
 
 
 # ---------------------------------------------------------------------------
