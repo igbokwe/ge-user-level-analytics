@@ -20,6 +20,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent as Agent
+from google.genai.types import GenerateContentConfig, ThinkingConfig
 
 from agent.tools import (
     get_user_license_status,
@@ -136,7 +137,10 @@ def _after_tool(tool, args, tool_context, tool_response) -> None:  # type: ignor
 
 root_agent = Agent(
     name="ge_licence_governance_agent",
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
+    generate_content_config=GenerateContentConfig(
+        thinking_config=ThinkingConfig(thinking_budget=0),
+    ),
     description=(
         "Governs Gemini Enterprise licences by identifying inactive users, "
         "revoking their licences, and notifying them and organisation administrators."

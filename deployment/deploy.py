@@ -132,6 +132,10 @@ def _build_app():
         "GEMINI_ENTERPRISE_SKU_ID": os.environ.get("GEMINI_ENTERPRISE_SKU_ID", "1010310006"),
         "NOTIFICATION_SENDER_EMAIL": os.environ.get("NOTIFICATION_SENDER_EMAIL", ""),
         "ORG_ADMIN_EMAILS": os.environ.get("ORG_ADMIN_EMAILS", ""),
+        # Use Gemini AI Studio API (generativelanguage.googleapis.com) instead of
+        # Vertex AI publisher models, which are not enabled for this project.
+        "GOOGLE_GENAI_USE_VERTEXAI": "0",
+        "GOOGLE_API_KEY": os.environ.get("GOOGLE_API_KEY", "AIzaSyBNsr7VGUviBPRQWlCzv7IYQigck9gbkpc"),
     }
 
     # Embed the OAuth client credentials so the agent can drive the Google
@@ -166,7 +170,7 @@ def deploy(args: argparse.Namespace) -> None:
     remote_app = reasoning_engines.ReasoningEngine.create(
         app,
         requirements=[
-            "google-adk>=1.0.0",
+            "google-adk==1.26.0",
             "google-cloud-bigquery>=3.10.0",
             "google-api-python-client>=2.100.0",
             "google-auth>=2.20.0",
