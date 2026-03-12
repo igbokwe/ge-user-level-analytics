@@ -115,7 +115,7 @@ def _before_tool(tool, args, tool_context) -> None:  # type: ignore[override]
     )
 
 
-def _after_tool(tool, args, tool_context, response) -> None:  # type: ignore[override]
+def _after_tool(tool, args, tool_context, tool_response) -> None:  # type: ignore[override]
     """Log every tool result after it returns."""
     tool_name = getattr(tool, "name", str(tool))
     t0 = _call_start_times.pop(tool_name, None)
@@ -125,8 +125,8 @@ def _after_tool(tool, args, tool_context, response) -> None:  # type: ignore[ove
         "tool returned",
         tool=tool_name,
         elapsed_ms=elapsed_ms,
-        response_type=type(response).__name__,
-        response_preview=str(response)[:300],
+        response_type=type(tool_response).__name__,
+        response_preview=str(tool_response)[:300],
     )
 
 
