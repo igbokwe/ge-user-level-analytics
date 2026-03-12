@@ -13,12 +13,20 @@ from typing import Any
 from google.cloud import logging as cloud_logging
 from google.oauth2 import service_account
 
+from agent.tools.trace import tracer
+
 _LOG_NAME = "gemini-enterprise-revocation-audit"
 
 
 def _get_logging_client() -> cloud_logging.Client:
     project_id = os.environ["GCP_PROJECT_ID"]
     creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    tracer.log(
+        "audit_logging_client",
+        "building Cloud Logging client",
+        project_id=project_id,
+        creds_path=creds_path,
+    )
     if creds_path:
         credentials = service_account.Credentials.from_service_account_file(
             creds_path,
@@ -50,28 +58,51 @@ def log_revocation_action(
     Returns:
         {"logged": bool, "error": str | None}
     """
-    client = _get_logging_client()
-    logger = client.logger(_LOG_NAME)
+    with tracer.span(
+        "log_revocation_action",
+        user_email=user_email,
+        revoked=revoked,
+        dry_run=dry_run,
+    ) as span:
+        client = _get_logging_client()
+        logger = client.logger(_LOG_NAME)
 
-    entry: dict[str, Any] = {
-        "event": "license_revocation",
-        "user": user_email,
-        "last_activity": last_activity,
-        "revoked": revoked,
-        "dry_run": dry_run,
-        "message": message,
-        "error": error,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "agent": "ge-user-level-analytics",
-    }
+        entry: dict[str, Any] = {
+            "event": "license_revocation",
+            "user": user_email,
+            "last_activity": last_activity,
+            "revoked": revoked,
+            "dry_run": dry_run,
+            "message": message,
+            "error": error,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "agent": "ge-user-level-analytics",
+        }
 
-    severity = "WARNING" if not revoked and error else ("INFO" if revoked else "NOTICE")
+        severity = "WARNING" if not revoked and error else ("INFO" if revoked else "NOTICE")
+        tracer.log(
+            "log_revocation_action",
+            "writing audit entry to Cloud Logging",
+            log_name=_LOG_NAME,
+            severity=severity,
+            entry=entry,
+        )
 
-    try:
-        logger.log_struct(entry, severity=severity)
-        return {"logged": True, "error": None}
-    except Exception as exc:  # noqa: BLE001
-        return {"logged": False, "error": str(exc)}
+        try:
+            logger.log_struct(entry, severity=severity)
+            tracer.log("log_revocation_action", "audit entry written successfully")
+            out = {"logged": True, "error": None}
+            span.ok(logged=True)
+            return out
+        except Exception as exc:  # noqa: BLE001
+            tracer.log(
+                "log_revocation_action",
+                "failed to write audit entry",
+                error=str(exc),
+            )
+            out = {"logged": False, "error": str(exc)}
+            span.ok(logged=False, error=str(exc))
+            return out
 
 
 def log_run_summary(
@@ -96,23 +127,48 @@ def log_run_summary(
     Returns:
         {"logged": bool, "error": str | None}
     """
-    client = _get_logging_client()
-    logger = client.logger(_LOG_NAME)
+    with tracer.span(
+        "log_run_summary",
+        run_id=run_id,
+        total_inactive=total_inactive,
+        total_revoked=total_revoked,
+        total_failed=total_failed,
+        dry_run=dry_run,
+    ) as span:
+        client = _get_logging_client()
+        logger = client.logger(_LOG_NAME)
 
-    entry: dict[str, Any] = {
-        "event": "run_summary",
-        "run_id": run_id,
-        "inactivity_threshold_days": inactivity_days,
-        "total_inactive_users": total_inactive,
-        "total_revoked": total_revoked,
-        "total_failed": total_failed,
-        "dry_run": dry_run,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "agent": "ge-user-level-analytics",
-    }
+        entry: dict[str, Any] = {
+            "event": "run_summary",
+            "run_id": run_id,
+            "inactivity_threshold_days": inactivity_days,
+            "total_inactive_users": total_inactive,
+            "total_revoked": total_revoked,
+            "total_failed": total_failed,
+            "dry_run": dry_run,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "agent": "ge-user-level-analytics",
+        }
 
-    try:
-        logger.log_struct(entry, severity="INFO")
-        return {"logged": True, "error": None}
-    except Exception as exc:  # noqa: BLE001
-        return {"logged": False, "error": str(exc)}
+        tracer.log(
+            "log_run_summary",
+            "writing run summary to Cloud Logging",
+            log_name=_LOG_NAME,
+            entry=entry,
+        )
+
+        try:
+            logger.log_struct(entry, severity="INFO")
+            tracer.log("log_run_summary", "run summary written successfully")
+            out = {"logged": True, "error": None}
+            span.ok(logged=True)
+            return out
+        except Exception as exc:  # noqa: BLE001
+            tracer.log(
+                "log_run_summary",
+                "failed to write run summary",
+                error=str(exc),
+            )
+            out = {"logged": False, "error": str(exc)}
+            span.ok(logged=False, error=str(exc))
+            return out

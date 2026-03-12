@@ -12,6 +12,7 @@ from agent.tools.log_analytics import (
     query_user_last_activity,
 )
 from agent.tools.notifier import notify_admins, notify_inactive_user
+from agent.tools.trace import tracer
 
 __all__ = [
     "query_inactive_users",
@@ -24,4 +25,5 @@ __all__ = [
     "notify_admins",
     "log_revocation_action",
     "log_run_summary",
+    "tracer",
 ]

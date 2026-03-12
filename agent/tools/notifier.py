@@ -21,6 +21,8 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from agent.tools.trace import tracer
+
 _GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
@@ -32,6 +34,7 @@ _GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 def _gmail_service(sender_email: str):
     """Return a Gmail API service client impersonating *sender_email*."""
     creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+    tracer.log("gmail_service", "building Gmail service", sender_email=sender_email, creds_path=creds_path)
     creds = service_account.Credentials.from_service_account_file(
         creds_path, scopes=_GMAIL_SCOPES
     ).with_subject(sender_email)
@@ -57,12 +60,32 @@ def _build_message(
 
 
 def _send_email(sender: str, recipient: str, subject: str, body_html: str, body_text: str) -> dict[str, Any]:
+    tracer.log(
+        "send_email",
+        "sending email via Gmail API",
+        sender=sender,
+        recipient=recipient,
+        subject=subject,
+    )
     service = _gmail_service(sender)
     message = _build_message(sender, recipient, subject, body_html, body_text)
     try:
         result = service.users().messages().send(userId="me", body=message).execute()
+        tracer.log(
+            "send_email",
+            "email sent successfully",
+            recipient=recipient,
+            message_id=result.get("id"),
+        )
         return {"sent": True, "message_id": result.get("id"), "error": None}
     except HttpError as exc:
+        tracer.log(
+            "send_email",
+            "HttpError sending email",
+            recipient=recipient,
+            http_status=exc.resp.status,
+            error=str(exc),
+        )
         return {"sent": False, "message_id": None, "error": str(exc)}
 
 
@@ -168,26 +191,47 @@ def notify_inactive_user(
     Returns:
         {"sent": bool, "message_id": str | None, "error": str | None}
     """
-    sender = os.environ["NOTIFICATION_SENDER_EMAIL"]
-    name = display_name or user_email.split("@")[0].replace(".", " ").title()
-
-    html = _USER_REVOCATION_HTML.format(
-        display_name=name,
-        inactivity_days=inactivity_days,
+    with tracer.span(
+        "notify_inactive_user",
+        user_email=user_email,
         last_activity=last_activity,
-    )
-    text = _USER_REVOCATION_TEXT.format(
         inactivity_days=inactivity_days,
-        last_activity=last_activity,
-    )
+    ) as span:
+        sender = os.environ.get("NOTIFICATION_SENDER_EMAIL", "")
+        tracer.log(
+            "notify_inactive_user",
+            "resolving sender",
+            sender=sender,
+            sender_configured=bool(sender),
+        )
 
-    return _send_email(
-        sender=sender,
-        recipient=user_email,
-        subject="Action Required: Your Gemini Enterprise Licence Has Been Revoked",
-        body_html=html,
-        body_text=text,
-    )
+        if not sender:
+            tracer.log("notify_inactive_user", "NOTIFICATION_SENDER_EMAIL not set — cannot send")
+            out = {"sent": False, "message_id": None, "error": "NOTIFICATION_SENDER_EMAIL is not configured."}
+            span.ok(sent=False, reason="sender_not_configured")
+            return out
+
+        name = display_name or user_email.split("@")[0].replace(".", " ").title()
+
+        html = _USER_REVOCATION_HTML.format(
+            display_name=name,
+            inactivity_days=inactivity_days,
+            last_activity=last_activity,
+        )
+        text = _USER_REVOCATION_TEXT.format(
+            inactivity_days=inactivity_days,
+            last_activity=last_activity,
+        )
+
+        result = _send_email(
+            sender=sender,
+            recipient=user_email,
+            subject="Action Required: Your Gemini Enterprise Licence Has Been Revoked",
+            body_html=html,
+            body_text=text,
+        )
+        span.ok(sent=result["sent"], message_id=result.get("message_id"), error=result.get("error"))
+        return result
 
 
 def notify_admins(
@@ -208,63 +252,85 @@ def notify_admins(
     """
     import datetime as _dt
 
-    sender = os.environ["NOTIFICATION_SENDER_EMAIL"]
-    admin_emails_raw = os.environ.get("ORG_ADMIN_EMAILS", "")
-    admin_emails = [e.strip() for e in admin_emails_raw.split(",") if e.strip()]
-
-    if not admin_emails:
-        return {"sent_to": [], "errors": ["ORG_ADMIN_EMAILS is not configured."]}
-
-    run_date = _dt.date.today().isoformat()
-    total = len(revocation_results)
-
-    # Build HTML rows
-    html_rows = ""
-    text_rows = ""
-    for r in revocation_results:
-        revoked = r.get("revoked", False)
-        color = "#1e8e3e" if revoked else "#d93025"
-        html_rows += _ADMIN_ROW_HTML.format(
-            user=r.get("user", ""),
-            last_activity=r.get("last_activity", "unknown"),
-            revoked="Yes" if revoked else "No",
-            color=color,
-            details=r.get("message", r.get("error", "")),
-        )
-        text_rows += (
-            f"  {r.get('user', '')} | "
-            f"last active: {r.get('last_activity', 'unknown')} | "
-            f"revoked: {'yes' if revoked else 'no'} | "
-            f"{r.get('message', '')}\n"
-        )
-
-    body_html = _ADMIN_SUMMARY_HTML.format(
-        run_date=run_date,
-        total=total,
+    with tracer.span(
+        "notify_admins",
+        result_count=len(revocation_results),
         inactivity_days=inactivity_days,
-        rows=html_rows,
-    )
-    body_text = _ADMIN_SUMMARY_TEXT.format(
-        run_date=run_date,
-        total=total,
-        inactivity_days=inactivity_days,
-        rows=text_rows,
-    )
+    ) as span:
+        sender = os.environ.get("NOTIFICATION_SENDER_EMAIL", "")
+        admin_emails_raw = os.environ.get("ORG_ADMIN_EMAILS", "")
+        admin_emails = [e.strip() for e in admin_emails_raw.split(",") if e.strip()]
 
-    sent_to: list[str] = []
-    errors: list[str] = []
-
-    for admin_email in admin_emails:
-        result = _send_email(
+        tracer.log(
+            "notify_admins",
+            "resolved config",
             sender=sender,
-            recipient=admin_email,
-            subject=f"[Report] Gemini Enterprise Licence Revocations — {run_date}",
-            body_html=body_html,
-            body_text=body_text,
+            sender_configured=bool(sender),
+            admin_emails=admin_emails,
+            admin_count=len(admin_emails),
         )
-        if result["sent"]:
-            sent_to.append(admin_email)
-        else:
-            errors.append(f"{admin_email}: {result['error']}")
 
-    return {"sent_to": sent_to, "errors": errors}
+        if not admin_emails:
+            tracer.log("notify_admins", "ORG_ADMIN_EMAILS not configured — cannot send")
+            out = {"sent_to": [], "errors": ["ORG_ADMIN_EMAILS is not configured."]}
+            span.ok(sent_to=[], errors=out["errors"])
+            return out
+
+        run_date = _dt.date.today().isoformat()
+        total = len(revocation_results)
+
+        # Build HTML rows
+        html_rows = ""
+        text_rows = ""
+        for r in revocation_results:
+            revoked = r.get("revoked", False)
+            color = "#1e8e3e" if revoked else "#d93025"
+            html_rows += _ADMIN_ROW_HTML.format(
+                user=r.get("user", ""),
+                last_activity=r.get("last_activity", "unknown"),
+                revoked="Yes" if revoked else "No",
+                color=color,
+                details=r.get("message", r.get("error", "")),
+            )
+            text_rows += (
+                f"  {r.get('user', '')} | "
+                f"last active: {r.get('last_activity', 'unknown')} | "
+                f"revoked: {'yes' if revoked else 'no'} | "
+                f"{r.get('message', '')}\n"
+            )
+
+        body_html = _ADMIN_SUMMARY_HTML.format(
+            run_date=run_date,
+            total=total,
+            inactivity_days=inactivity_days,
+            rows=html_rows,
+        )
+        body_text = _ADMIN_SUMMARY_TEXT.format(
+            run_date=run_date,
+            total=total,
+            inactivity_days=inactivity_days,
+            rows=text_rows,
+        )
+
+        sent_to: list[str] = []
+        errors: list[str] = []
+
+        for admin_email in admin_emails:
+            tracer.log("notify_admins", "sending to admin", admin_email=admin_email)
+            result = _send_email(
+                sender=sender,
+                recipient=admin_email,
+                subject=f"[Report] Gemini Enterprise Licence Revocations — {run_date}",
+                body_html=body_html,
+                body_text=body_text,
+            )
+            if result["sent"]:
+                sent_to.append(admin_email)
+                tracer.log("notify_admins", "admin notified", admin_email=admin_email)
+            else:
+                err = f"{admin_email}: {result['error']}"
+                errors.append(err)
+                tracer.log("notify_admins", "failed to notify admin", admin_email=admin_email, error=result["error"])
+
+        span.ok(sent_to=sent_to, error_count=len(errors))
+        return {"sent_to": sent_to, "errors": errors}

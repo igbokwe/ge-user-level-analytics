@@ -15,6 +15,8 @@ Deployment target: Vertex AI Agent Engine
 from __future__ import annotations
 
 import os
+import time
+from typing import Any
 
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent as Agent
@@ -31,6 +33,7 @@ from agent.tools import (
     query_user_last_activity,
     revoke_gemini_license,
 )
+from agent.tools.trace import tracer
 
 load_dotenv()
 
@@ -94,6 +97,40 @@ Your primary mission is to enforce the Gemini Enterprise licence policy by:
 )
 
 # ---------------------------------------------------------------------------
+# Agent-level tool callbacks (cross-cutting trace)
+# ---------------------------------------------------------------------------
+
+_call_start_times: dict[str, float] = {}
+
+
+def _before_tool(tool, args, tool_context) -> None:  # type: ignore[override]
+    """Log every tool invocation before it runs."""
+    tool_name = getattr(tool, "name", str(tool))
+    _call_start_times[tool_name] = time.perf_counter()
+    tracer.log(
+        "agent_before_tool",
+        "tool dispatch",
+        tool=tool_name,
+        args=args,
+    )
+
+
+def _after_tool(tool, args, tool_context, response) -> None:  # type: ignore[override]
+    """Log every tool result after it returns."""
+    tool_name = getattr(tool, "name", str(tool))
+    t0 = _call_start_times.pop(tool_name, None)
+    elapsed_ms = int((time.perf_counter() - t0) * 1000) if t0 is not None else None
+    tracer.log(
+        "agent_after_tool",
+        "tool returned",
+        tool=tool_name,
+        elapsed_ms=elapsed_ms,
+        response_type=type(response).__name__,
+        response_preview=str(response)[:300],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Agent definition
 # ---------------------------------------------------------------------------
 
@@ -121,4 +158,6 @@ root_agent = Agent(
         log_revocation_action,
         log_run_summary,
     ],
+    before_tool_callback=_before_tool,
+    after_tool_callback=_after_tool,
 )
