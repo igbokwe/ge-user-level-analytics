@@ -91,3 +91,25 @@ def get_workspace_credentials(tool_context: ToolContext):
     # No token yet — ask GE to show the user a consent screen
     tool_context.request_credential(auth_config)
     return None
+
+
+def request_workspace_auth(context) -> bool:
+    """Eagerly request Workspace OAuth credentials from the invoking user.
+
+    Can be called from a ``before_agent_callback`` (``CallbackContext``) or a
+    tool function (``ToolContext``) — both expose ``request_credential`` and
+    ``get_auth_response``.
+
+    Returns:
+        True  — credentials are already cached; no consent screen needed.
+        False — ``request_credential()`` was called; the ADK framework will
+                pause the agent and show the user a Google consent screen.
+    """
+    auth_config = _workspace_auth_config()
+    auth_credential = context.get_auth_response(auth_config)
+
+    if auth_credential and auth_credential.oauth2 and auth_credential.oauth2.access_token:
+        return True
+
+    context.request_credential(auth_config)
+    return False
