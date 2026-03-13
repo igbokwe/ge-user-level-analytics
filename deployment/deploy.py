@@ -171,6 +171,7 @@ def deploy(args: argparse.Namespace) -> None:
         app,
         requirements=[
             "google-adk==1.26.0",
+            "authlib>=1.3.0",
             "google-cloud-bigquery>=3.10.0",
             "google-api-python-client>=2.100.0",
             "google-auth>=2.20.0",
