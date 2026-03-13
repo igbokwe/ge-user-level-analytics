@@ -135,7 +135,7 @@ def _build_app():
         # Use Gemini AI Studio API (generativelanguage.googleapis.com) instead of
         # Vertex AI publisher models, which are not enabled for this project.
         "GOOGLE_GENAI_USE_VERTEXAI": "0",
-        "GOOGLE_API_KEY": os.environ.get("GOOGLE_API_KEY", "AIzaSyBNsr7VGUviBPRQWlCzv7IYQigck9gbkpc"),
+        "GOOGLE_API_KEY": os.environ.get("GOOGLE_API_KEY", "AIzaSyAuyaNv0oKpUYqLTo26fLxMdOKUlzHctuA"),
     }
 
     # Embed the OAuth client credentials so the agent can drive the Google
