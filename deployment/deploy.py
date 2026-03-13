@@ -138,11 +138,14 @@ def _build_app():
         "GOOGLE_API_KEY": os.environ["GOOGLE_API_KEY"],
     }
 
-    # Embed the OAuth client credentials so the agent can drive the Google
-    # Identity for Agents consent flow at runtime.  The actual user tokens
-    # are obtained on-demand via the ADK ToolContext OAuth flow — they are
-    # never baked into the deployment.
-    for oauth_var in ("OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET"):
+    # Embed OAuth credentials.  WORKSPACE_ADMIN_REFRESH_TOKEN enables the
+    # pre-stored-token auth path so the agent works without a per-session
+    # consent flow (needed when GE does not surface the consent button).
+    for oauth_var in (
+        "OAUTH_CLIENT_ID",
+        "OAUTH_CLIENT_SECRET",
+        "WORKSPACE_ADMIN_REFRESH_TOKEN",
+    ):
         value = os.environ.get(oauth_var, "")
         if value:
             env_vars[oauth_var] = value

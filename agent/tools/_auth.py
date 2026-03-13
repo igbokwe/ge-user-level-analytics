@@ -2,10 +2,9 @@
 Shared Google Workspace authentication for agent tools.
 
 Tools that need to call Google Workspace APIs (Licensing, Directory, Gmail)
-use the ADK ToolContext OAuth flow so the agent acts on behalf of the user
-who is currently running it.
+support two authentication paths (tried in order):
 
-Flow:
+Path 1 — ADK ToolContext OAuth (per-user consent in GE):
   1. Tool calls `get_workspace_credentials(tool_context)`.
   2. If no credentials are cached in the session, `tool_context.request_credential()`
      signals GE to generate a Google OAuth consent URL (requires `authlib` to be
@@ -14,9 +13,16 @@ Flow:
      exchanges the auth code, stores the token in session state, and the next
      tool call returns a valid Credentials object via `get_auth_response()`.
 
+Path 2 — Pre-stored admin refresh token (one-time setup):
+  If WORKSPACE_ADMIN_REFRESH_TOKEN is set in the environment, the agent uses
+  that refresh token directly without requiring a per-session consent flow.
+  Run `python get_admin_token.py` once locally to obtain the token, then set:
+    WORKSPACE_ADMIN_REFRESH_TOKEN=<token>  in your .env / deployment env.
+
 Required env vars:
-  OAUTH_CLIENT_ID     – OAuth 2.0 client ID for the consent screen
-  OAUTH_CLIENT_SECRET – matching client secret
+  OAUTH_CLIENT_ID              – OAuth 2.0 Web/Desktop client ID
+  OAUTH_CLIENT_SECRET          – matching client secret
+  WORKSPACE_ADMIN_REFRESH_TOKEN – (optional) pre-stored admin refresh token
 """
 
 from __future__ import annotations
@@ -67,12 +73,13 @@ def _workspace_auth_config() -> AuthConfig:
 def get_workspace_credentials(tool_context: ToolContext):
     """Return a google.oauth2.credentials.Credentials for Workspace API calls.
 
-    Returns None and triggers the OAuth consent flow when credentials are not
-    yet available in the session.  The caller must check for None and return an
-    appropriate auth-required response to the agent.
+    Tries Path 1 (ADK per-user OAuth) first, then falls back to Path 2
+    (pre-stored WORKSPACE_ADMIN_REFRESH_TOKEN).  Returns None only when
+    neither path is available, which also triggers the GE consent prompt.
     """
     from google.oauth2.credentials import Credentials  # noqa: PLC0415
 
+    # --- Path 1: ADK per-user OAuth (GE consent button) ---
     auth_config = _workspace_auth_config()
     auth_credential = tool_context.get_auth_response(auth_config)
 
@@ -86,8 +93,19 @@ def get_workspace_credentials(tool_context: ToolContext):
             scopes=WORKSPACE_SCOPES,
         )
 
-    # No token yet — request_credential generates the OAuth auth URI (via authlib)
-    # and signals GE to show the user an "Authorize" button.
+    # --- Path 2: pre-stored admin refresh token ---
+    admin_refresh_token = os.environ.get("WORKSPACE_ADMIN_REFRESH_TOKEN", "")
+    if admin_refresh_token:
+        return Credentials(
+            token=None,
+            refresh_token=admin_refresh_token,
+            client_id=os.environ.get("OAUTH_CLIENT_ID"),
+            client_secret=os.environ.get("OAUTH_CLIENT_SECRET"),
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=WORKSPACE_SCOPES,
+        )
+
+    # --- No credentials available: trigger the GE OAuth consent prompt ---
     tool_context.request_credential(auth_config)
     return None
 
