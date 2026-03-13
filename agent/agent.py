@@ -20,8 +20,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent as Agent
-from google.adk.agents.callback_context import CallbackContext
-from google.genai.types import Content, GenerateContentConfig, Part, ThinkingConfig
+from google.genai.types import GenerateContentConfig, ThinkingConfig
 
 from agent.tools import (
     get_user_license_status,
@@ -35,7 +34,6 @@ from agent.tools import (
     query_user_last_activity,
     revoke_gemini_license,
 )
-from agent.tools._auth import request_workspace_auth
 from agent.tools.trace import tracer
 
 load_dotenv()
@@ -98,36 +96,6 @@ Your primary mission is to enforce the Gemini Enterprise licence policy by:
 """.format(
     inactivity_days=int(os.environ.get("INACTIVITY_THRESHOLD_DAYS", 45))
 )
-
-# ---------------------------------------------------------------------------
-# Before-agent callback: request Workspace OAuth before the first LLM call
-# ---------------------------------------------------------------------------
-
-
-def _before_agent(callback_context: CallbackContext):
-    """Trigger the Google Workspace OAuth consent screen at the start of every
-    agent turn so GE surfaces the authorisation UI before tool calls run.
-
-    Returns None (continue normally) when credentials are already available,
-    or a Content response telling the user to complete the consent flow.
-    """
-    tracer.log("agent_startup", "checking Workspace credentials")
-    if request_workspace_auth(callback_context):
-        return None  # Already authorised — proceed normally
-
-    # request_credential() was called; GE will show the consent popup.
-    return Content(
-        parts=[
-            Part(
-                text=(
-                    "I need access to your Google Workspace account before I can help.\n\n"
-                    "**Please authorise access** using the consent button that has appeared "
-                    "in this interface, then resend your message."
-                )
-            )
-        ]
-    )
-
 
 # ---------------------------------------------------------------------------
 # Agent-level tool callbacks (cross-cutting trace)
@@ -194,7 +162,6 @@ root_agent = Agent(
         log_revocation_action,
         log_run_summary,
     ],
-    before_agent_callback=_before_agent,
     before_tool_callback=_before_tool,
     after_tool_callback=_after_tool,
 )
