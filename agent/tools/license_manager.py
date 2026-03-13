@@ -38,7 +38,8 @@ _AUTH_REQUIRED = {
     "error": "authentication_required",
     "message": (
         "Google Workspace access is required. "
-        "Please authorise the agent via the consent screen that has appeared."
+        "Please authorise the agent using the consent button in the interface, "
+        "then resend your message."
     ),
 }
 
