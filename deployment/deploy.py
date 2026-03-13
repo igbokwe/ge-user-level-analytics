@@ -108,6 +108,23 @@ def _init_vertexai() -> None:
 
     ReasoningEngineServiceClient.__init__ = _rest_init
 
+    # The server may return new fields (e.g. effectiveIdentity) that the local
+    # protobuf stubs don't know about.  Patch the operations REST transport to
+    # use ignore_unknown_fields=True so LRO polling doesn't crash.
+    try:
+        from google.api_core.operations_v1.transports import rest as ops_rest  # noqa: PLC0415
+        from google.protobuf import json_format as pbjson  # noqa: PLC0415
+
+        _orig_parse = pbjson.Parse
+
+        def _parse_ignore_unknown(text, message, *args, **kwargs):
+            kwargs["ignore_unknown_fields"] = True
+            return _orig_parse(text, message, *args, **kwargs)
+
+        pbjson.Parse = _parse_ignore_unknown
+    except Exception:  # noqa: BLE001
+        pass  # Non-critical — proceed without the patch
+
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=STAGING_BUCKET)
 
 
