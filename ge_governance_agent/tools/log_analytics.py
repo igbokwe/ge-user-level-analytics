@@ -5,12 +5,16 @@ inactive Gemini Enterprise users based on Discovery Engine API audit logs.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from google.cloud import bigquery
-from google.oauth2 import service_account
+from ge_governance_agent.auth import get_credentials
+from ge_governance_agent.tools.license_manager import list_all_licensed_users
+
+logger = logging.getLogger('ge_governance_agent.' + __name__)
 
 # ---------------------------------------------------------------------------
 # Configuration helpers
@@ -28,14 +32,8 @@ _ACTIVE_METHODS = [
 
 def _get_bq_client() -> bigquery.Client:
     project_id = os.environ["GCP_PROJECT_ID"]
-    creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if creds_path:
-        credentials = service_account.Credentials.from_service_account_file(
-            creds_path,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        return bigquery.Client(project=project_id, credentials=credentials)
-    return bigquery.Client(project=project_id)
+    credentials = get_credentials(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    return bigquery.Client(project=project_id, credentials=credentials)
 
 
 def _log_table(project_id: str) -> str:
@@ -92,8 +90,11 @@ def query_inactive_users(inactivity_days: int = 45) -> dict[str, Any]:
         ]
     )
 
+    logger.info("Querying inactive users with threshold: %d days (%s)", inactivity_days, threshold.isoformat())
     client = _get_bq_client()
-    rows = client.query(sql, job_config=job_config).result()
+    query_job = client.query(sql, job_config=job_config)
+    rows = query_job.result()
+    logger.debug("BigQuery job %s completed.", query_job.job_id)
 
     inactive: list[dict[str, str]] = []
     for row in rows:
@@ -113,6 +114,53 @@ def query_inactive_users(inactivity_days: int = 45) -> dict[str, Any]:
         "inactive_users": inactive,
         "threshold_date": threshold.isoformat(),
         "queried_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def query_discovery_engine_inactivity(inactivity_days: int = 45) -> dict[str, Any]:
+    """
+    Find inactive users by checking their lastLoginTime as reported by the 
+    Discovery Engine License API. This is the "correct approach" for identify 
+    dormant Gemini Enterprise seats.
+
+    Args:
+        inactivity_days: Days of inactivity threshold.
+
+    Returns:
+        A dict with inactive_users list and metadata.
+    """
+    result = list_all_licensed_users()
+    if result.get("error"):
+        return {"inactive_users": [], "error": result["error"]}
+
+    threshold = datetime.now(timezone.utc) - timedelta(days=inactivity_days)
+    inactive: list[dict[str, str]] = []
+
+    for user in result.get("licensed_users", []):
+        if user["state"] != "ASSIGNED":
+            continue
+        
+        last_login_str = user.get("last_login")
+        if not last_login_str:
+            # Never logged in? Consider inactive.
+            inactive.append({
+                "user": user["user"],
+                "last_activity": "never",
+            })
+            continue
+
+        last_login = datetime.fromisoformat(last_login_str)
+        if last_login < threshold:
+            inactive.append({
+                "user": user["user"],
+                "last_activity": last_login.isoformat(),
+            })
+
+    return {
+        "inactive_users": inactive,
+        "threshold_date": threshold.isoformat(),
+        "queried_at": datetime.now(timezone.utc).isoformat(),
+        "source": "Discovery Engine License API"
     }
 
 
@@ -158,6 +206,7 @@ def query_user_last_activity(user_email: str) -> dict[str, Any]:
         ]
     )
 
+    logger.info("Querying last activity for user: %s", user_email)
     client = _get_bq_client()
     rows = list(client.query(sql, job_config=job_config).result())
 
@@ -184,7 +233,7 @@ def query_user_last_activity(user_email: str) -> dict[str, Any]:
 def query_daily_usage(days_back: int = 30) -> dict[str, Any]:
     """
     Return a daily usage breakdown from the Discovery Engine / Gemini Enterprise
-    analytics export in BigQuery (igbokwe.geminienterprise.analytics).
+    analytics export in BigQuery ({project_id}.geminienterprise.analytics).
 
     Args:
         days_back: Number of past days to include in the report. Default 30.

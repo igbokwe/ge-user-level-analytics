@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "igbokwe")
+PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 LOCATION = "us"
 BASE_URL = f"https://{LOCATION}-discoveryengine.googleapis.com/v1alpha"
 ASSISTANT_ID = "default_assistant"
@@ -136,7 +136,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--engine-id",
-        default="outcome-devtest_1772673946815",
+        default="outcome_1770956866236",
         help="Discovery Engine / GE app engine ID",
     )
     sub = parser.add_subparsers(dest="command", required=True)

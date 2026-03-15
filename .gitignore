@@ -2,6 +2,8 @@
 .env
 *.json
 !.env.example
+*-key.json
+service-account*.json
 
 # Agent Engine artefacts
 .last_resource_name
@@ -19,3 +21,12 @@ __pycache__/
 dist/
 *.egg-info/
 .eggs/
+
+# Test & coverage artefacts
+.coverage
+.pytest_cache/
+test_output.txt
+htmlcov/
+
+# Temporary scripts (not part of distribution)
+test_production.py

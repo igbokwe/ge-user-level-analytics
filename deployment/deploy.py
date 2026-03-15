@@ -37,7 +37,7 @@ load_dotenv()
 # Configuration (resolved after load_dotenv)
 # ---------------------------------------------------------------------------
 
-PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "igbokwe")
+PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
 STAGING_BUCKET = os.environ.get(
     "STAGING_BUCKET", f"gs://{PROJECT_ID}-agent-engine-staging"
@@ -100,7 +100,7 @@ def _build_app():
     from vertexai.preview.reasoning_engines import AdkApp  # noqa: PLC0415
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from agent.agent import root_agent  # noqa: PLC0415
+    from ge_governance_agent.agent import root_agent  # noqa: PLC0415
 
     return AdkApp(
         agent=root_agent,
@@ -144,6 +144,7 @@ def deploy(args: argparse.Namespace) -> None:
         requirements=[
             "google-adk>=1.0.0",
             "google-cloud-bigquery>=3.10.0",
+            "google-cloud-discoveryengine>=0.11.0",
             "google-api-python-client>=2.100.0",
             "google-auth>=2.20.0",
             "google-auth-httplib2>=0.2.0",
@@ -158,7 +159,7 @@ def deploy(args: argparse.Namespace) -> None:
             "Governs Gemini Enterprise licences: identifies inactive users (>45 days), "
             "revokes their licences, and notifies users and org administrators."
         ),
-        extra_packages=["./agent"],
+        extra_packages=["./ge_governance_agent"],
     )
 
     print("\nDeployment successful!")

@@ -11,21 +11,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from google.cloud import logging as cloud_logging
-from google.oauth2 import service_account
+from ge_governance_agent.auth import get_credentials
 
 _LOG_NAME = "gemini-enterprise-revocation-audit"
 
 
 def _get_logging_client() -> cloud_logging.Client:
     project_id = os.environ["GCP_PROJECT_ID"]
-    creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if creds_path:
-        credentials = service_account.Credentials.from_service_account_file(
-            creds_path,
-            scopes=["https://www.googleapis.com/auth/logging.write"],
-        )
-        return cloud_logging.Client(project=project_id, credentials=credentials)
-    return cloud_logging.Client(project=project_id)
+    credentials = get_credentials(scopes=["https://www.googleapis.com/auth/logging.write"])
+    return cloud_logging.Client(project=project_id, credentials=credentials)
 
 
 def log_revocation_action(

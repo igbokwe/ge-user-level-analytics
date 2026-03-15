@@ -12,14 +12,18 @@ Required service-account scopes (domain-wide delegation):
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
 
-from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+from ge_governance_agent.auth import get_credentials
+
+logger = logging.getLogger('ge_governance_agent.' + __name__)
 
 _GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
@@ -31,10 +35,7 @@ _GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 def _gmail_service(sender_email: str):
     """Return a Gmail API service client impersonating *sender_email*."""
-    creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-    creds = service_account.Credentials.from_service_account_file(
-        creds_path, scopes=_GMAIL_SCOPES
-    ).with_subject(sender_email)
+    creds = get_credentials(scopes=_GMAIL_SCOPES, subject=sender_email)
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
@@ -55,15 +56,20 @@ def _build_message(
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     return {"raw": raw}
 
-
 def _send_email(sender: str, recipient: str, subject: str, body_html: str, body_text: str) -> dict[str, Any]:
-    service = _gmail_service(sender)
-    message = _build_message(sender, recipient, subject, body_html, body_text)
+    logger.info("Sending email from %s to %s (Subject: %s)", sender, recipient, subject)
     try:
+        service = _gmail_service(sender)
+        message = _build_message(sender, recipient, subject, body_html, body_text)
         result = service.users().messages().send(userId="me", body=message).execute()
+        logger.info("Email sent successfully. Message ID: %s", result.get("id"))
         return {"sent": True, "message_id": result.get("id"), "error": None}
     except HttpError as exc:
+        logger.error("Failed to send email to %s: %s", recipient, exc)
         return {"sent": False, "message_id": None, "error": str(exc)}
+    except Exception as e:
+        logger.error("Unexpected error sending email to %s: %s", recipient, e)
+        return {"sent": False, "message_id": None, "error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +199,7 @@ def notify_inactive_user(
 def notify_admins(
     revocation_results: list[dict[str, Any]],
     inactivity_days: int = 45,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """
     Send a summary revocation report to all configured org administrators.
@@ -253,6 +260,10 @@ def notify_admins(
 
     sent_to: list[str] = []
     errors: list[str] = []
+
+    if dry_run:
+        logger.info("[DRY RUN] Skipping admin notifications for: %s", admin_emails)
+        return {"sent_to": [], "errors": [f"[DRY RUN] Would notify {admin_emails}"]}
 
     for admin_email in admin_emails:
         result = _send_email(

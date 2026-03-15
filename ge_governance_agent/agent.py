@@ -19,7 +19,7 @@ import os
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent as Agent
 
-from agent.tools import (
+from ge_governance_agent.tools import (
     get_user_license_status,
     list_all_licensed_users,
     log_revocation_action,
@@ -27,12 +27,19 @@ from agent.tools import (
     notify_admins,
     notify_inactive_user,
     query_daily_usage,
+    query_discovery_engine_inactivity,
     query_inactive_users,
     query_user_last_activity,
     revoke_gemini_license,
 )
 
 load_dotenv()
+
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
+if "GCP_PROJECT_ID" in os.environ:
+    os.environ["GOOGLE_CLOUD_PROJECT"] = os.environ["GCP_PROJECT_ID"]
+if "GCP_LOCATION" in os.environ:
+    os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ["GCP_LOCATION"]
 
 # ---------------------------------------------------------------------------
 # System instruction
@@ -52,7 +59,7 @@ Your primary mission is to enforce the Gemini Enterprise licence policy by:
 ## Workflow (follow this exact sequence when asked to run a revocation cycle):
 
 1. **Query inactive users**
-   Call `query_inactive_users` with `inactivity_days={inactivity_days}`.
+   Call `query_discovery_engine_inactivity` with `inactivity_days={inactivity_days}`.
    Record the list of inactive users and the threshold date.
 
 2. **For each inactive user** (process sequentially):
@@ -99,14 +106,15 @@ Your primary mission is to enforce the Gemini Enterprise licence policy by:
 
 root_agent = Agent(
     name="ge_licence_governance_agent",
-    model="gemini-2.0-flash",
+    model="gemini-2.5-pro",
     description=(
         "Governs Gemini Enterprise licences by identifying inactive users, "
         "revoking their licences, and notifying them and organisation administrators."
     ),
     instruction=_SYSTEM_INSTRUCTION,
     tools=[
-        # Log Analytics
+        # Log Analytics / Inactivity
+        query_discovery_engine_inactivity,
         query_inactive_users,
         query_user_last_activity,
         query_daily_usage,

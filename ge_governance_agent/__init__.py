@@ -1,5 +1,5 @@
 """GE User Level Analytics ADK agent package."""
 
-from agent.agent import root_agent
+from ge_governance_agent.agent import root_agent
 
 __all__ = ["root_agent"]

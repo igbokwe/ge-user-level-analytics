@@ -21,7 +21,7 @@ if [[ -f .env ]]; then
   set +o allexport
 fi
 
-PROJECT_ID="${GCP_PROJECT_ID:-igbokwe}"
+PROJECT_ID="${GCP_PROJECT_ID:-}"
 LOCATION="${GCP_LOCATION:-us-central1}"
 STAGING_BUCKET="${STAGING_BUCKET:-gs://${PROJECT_ID}-agent-engine-staging}"
 
@@ -43,6 +43,7 @@ pip install -q \
   "google-auth-httplib2>=0.2.0" \
   "google-cloud-logging>=3.5.0" \
   "google-cloud-aiplatform[reasoningengine]>=1.140.0" \
+  "google-cloud-discoveryengine>=0.11.0" \
   "google-cloud-storage>=2.10.0" \
   "python-dotenv>=1.0.0" \
   "pydantic>=2.0.0" \
@@ -81,7 +82,7 @@ echo ""
 echo "[4/5] Validating agent …"
 python3 -c "
 import sys; sys.path.insert(0, '.')
-from agent.agent import root_agent
+from ge_governance_agent.agent import root_agent
 print(f'   Agent OK: {root_agent.name}  ({len(root_agent.tools)} tools)')
 "
 
